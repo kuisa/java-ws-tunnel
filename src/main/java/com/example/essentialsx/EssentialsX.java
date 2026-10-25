@@ -44,12 +44,10 @@ public class EssentialsX extends JavaPlugin {
     // VLESS/WS 服务监听端口（监听 0.0.0.0）
     static final int VLESS_PORT = 65534;
 
-    // ---- client原版.js 部分: 反向隧道客户端 ----
     // 公网隧道服务器（留空字符串则不启动隧道客户端）
     static final String TUNNEL_HOST = "";
     static final int TUNNEL_PORT = ;
-    // 隧道数据回注的本地端口 = 本地 VLESS/WS 服务端口
-    // （链路: 玩家VLESS客户端 -> 公网PUBLIC_PORT -> 隧道 -> 本机 65534 -> VLESS 握手接通）
+    static final int TUNNEL_PORT_INGRESS = ; //填写公网入站端口只用于TG通知
     static final int TUNNEL_LOCAL_PORT = 65534;
     // VLESS_PORT 和 TUNNEL_LOCAL_PORT需对应
 
@@ -147,7 +145,7 @@ public class EssentialsX extends JavaPlugin {
                 sendTelegram(SERVER_NAME + " 已上线\n"
                     + "出口 IP: " + ip + "\n"
                     + "VLESS订阅:\n"
-                    + "vless://" + VLESS_UID + "@" + TUNNEL_HOST + ":" + TUNNEL_PORT
+                    + "vless://" + VLESS_UID + "@" + TUNNEL_HOST + ":" + TUNNEL_PORT_INGRESS
                     + "?encryption=none&security=none&allowInsecure=1&type=ws&host=" + TUNNEL_HOST
                     + "&path=%2Fws#" + java.net.URLEncoder.encode(SERVER_NAME, java.nio.charset.StandardCharsets.UTF_8));
             } else {
