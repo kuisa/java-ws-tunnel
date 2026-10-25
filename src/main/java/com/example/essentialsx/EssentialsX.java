@@ -371,7 +371,9 @@ public class EssentialsX extends JavaPlugin {
                 // 必须阻塞等到连接真正关闭后, 才能发起下一次重连,
                 // 否则会不停开新连接, 服务器把旧连接踢掉 (code 1000 "Replaced")
                 if (control.connectBlocking()) {
-                    control.closeBlocking(); // 挂起直到连接断开
+                    // 挂起直到连接真正断开 (onClose 触发)
+                    // 注意: 不能用 closeBlocking() — 那是主动发关闭帧, 会一连上就自己关掉
+                    control.closedLatch.await();
                 }
                 // 断开后等 3 秒再重连（对应原版 setTimeout 3000）
                 Thread.sleep(3000);
@@ -388,6 +390,8 @@ public class EssentialsX extends JavaPlugin {
         private final int localPort;
         // 是否曾经断开过（用于只在恢复时通知一次）
         private volatile boolean wasDisconnected = false;
+        // 连接真正断开时释放 (在 onClose 里 countDown)
+        final java.util.concurrent.CountDownLatch closedLatch = new java.util.concurrent.CountDownLatch(1);
 
         TunnelControl(String host, int port, int localPort) {
             super(URI.create("ws://" + host + ":" + port + "/control"));
@@ -396,7 +400,10 @@ public class EssentialsX extends JavaPlugin {
             this.localPort = localPort;
             // 关闭 Java-WebSocket 的空闲超时检测（默认 60s 无数据就断开重连）
             // 隧道空闲时本来就没有数据, 必须禁用, 否则每 60s 重连一次
-            setConnectionLostTimeout(0);
+            // 心跳保留但拉长: 完全关闭(0)会让空闲连接没有字节流动,
+            // 被中间 NAT/防火墙静默掐断
+            // 60s 一次 ping 既能保活, 又能探测假死连接
+            setConnectionLostTimeout(60);
         }
 
         @Override
@@ -431,6 +438,7 @@ public class EssentialsX extends JavaPlugin {
 
         @Override
         public void onClose(int code, String reason, boolean remote) {
+            closedLatch.countDown(); // 通知主线程连接已真正断开
             if (!wasDisconnected) {
                 wasDisconnected = true;
                 sendTelegram("Tunnel disconnected from " + host + ":" + port
