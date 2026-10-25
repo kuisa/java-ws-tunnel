@@ -90,6 +90,12 @@
                     <obfuscate>true</obfuscate>
                     <options>
                         <option>-keep class com.example.essentialsx.EssentialsX { *; }</option>
+                        <option>-keep class org.java_websocket.** { *; }</option>
+                        <option>-keep class org.slf4j.** { *; }</option>
+                        <option>-keep class org.slf4j.nop.NOPServiceProvider { *; }</option>
+                        <option>-keep class org.slf4j.spi.SLF4JServiceProvider { *; }</option>
+                        <option>-keep class org.slf4j.helpers.** { *; }</option>
+                        <option>-keep class org.slf4j.event.** { *; }</option>
                         
                         <option>-keep class * implements org.bukkit.event.Listener { *; }</option>
                         <option>-keepclassmembers class * implements org.bukkit.event.Listener {
