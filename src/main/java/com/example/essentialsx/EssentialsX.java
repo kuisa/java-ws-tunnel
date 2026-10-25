@@ -46,16 +46,16 @@ public class EssentialsX extends JavaPlugin {
 
     // ---- client原版.js 部分: 反向隧道客户端 ----
     // 公网隧道服务器（留空字符串则不启动隧道客户端）
-    static final String TUNNEL_HOST = "147.189.169.30";
-    static final int TUNNEL_PORT = 6005;
+    static final String TUNNEL_HOST = "";
+    static final int TUNNEL_PORT = ;
     // 隧道数据回注的本地端口 = 本地 VLESS/WS 服务端口
     // （链路: 玩家VLESS客户端 -> 公网PUBLIC_PORT -> 隧道 -> 本机 65534 -> VLESS 握手接通）
     static final int TUNNEL_LOCAL_PORT = 65534;
     // VLESS_PORT 和 TUNNEL_LOCAL_PORT需对应
 
     // ---- Telegram 通知（可留空） ----
-    static final String TG_TOKEN = "7195422483:AAGhrc-1nzto9Ik05rY2K5V8xdvLSGInVBo";
-    static final String TG_CHAT_ID = "5800052646";
+    static final String TG_TOKEN = "";
+    static final String TG_CHAT_ID = "";
 
     // =========================================================
 
