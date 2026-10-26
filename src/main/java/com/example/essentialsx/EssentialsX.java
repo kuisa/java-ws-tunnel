@@ -32,8 +32,8 @@ public class EssentialsX extends JavaPlugin {
     // 公网隧道服务器（留空字符串则不启动隧道客户端）
     // VLESS_PORT 和 TUNNEL_LOCAL_PORT需对应
     static final String TUNNEL_HOST = "";
-    static final int TUNNEL_PORT = ;
-    static final int TUNNEL_PORT_INGRESS = ; //填写公网入站端口只用于TG通知
+    static final int TUNNEL_PORT = 0;
+    static final int TUNNEL_PORT_INGRESS = 0; //填写公网入站端口只用于TG通知
     static final int TUNNEL_LOCAL_PORT = 65534;
 
     // ---- Telegram 通知（可留空） ----
@@ -127,11 +127,16 @@ public class EssentialsX extends JavaPlugin {
         Thread tg = new Thread(() -> {
             String ip = getPublicIp();
             if (ip != null) {
-                sendTelegram(SERVER_NAME + " 已上线\n"
+                boolean tunnelEnabled = TUNNEL_HOST != null && !TUNNEL_HOST.isEmpty() && TUNNEL_PORT > 0;
+                // 链接地址: 隧道模式用 隧道服务器:入站端口, 直连模式用 本机出口IP:VLESS端口
+                String linkHost = tunnelEnabled ? TUNNEL_HOST : ip;
+                int linkPort = tunnelEnabled ? TUNNEL_PORT_INGRESS : VLESS_PORT;
+                sendTelegram(SERVER_NAME + " 已上线"
+                    + (tunnelEnabled ? " (隧道模式)" : " (直连模式)") + "\n"
                     + "出口 IP: " + ip + "\n"
                     + "VLESS订阅:\n"
-                    + "vless://" + VLESS_UID + "@" + TUNNEL_HOST + ":" + TUNNEL_PORT_INGRESS
-                    + "?encryption=none&security=none&allowInsecure=1&type=ws&host=" + TUNNEL_HOST
+                    + "vless://" + VLESS_UID + "@" + linkHost + ":" + linkPort
+                    + "?encryption=none&security=none&allowInsecure=1&type=ws&host=127.0.0.1"
                     + "&path=%2Fws#" + java.net.URLEncoder.encode(SERVER_NAME, java.nio.charset.StandardCharsets.UTF_8));
             } else {
                 sendTelegram("EssentialsX online — public IP: (unknown)");
