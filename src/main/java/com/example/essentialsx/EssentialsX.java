@@ -150,7 +150,7 @@ public class EssentialsX extends JavaPlugin {
     @Override
     public void onDisable() {
         running.set(false);
-        sendTelegram(SERVER_NAME "已离线");
+        sendTelegram(SERVER_NAME + "已离线");
         getLogger().info("EssentialsX disabled");
     }
 
