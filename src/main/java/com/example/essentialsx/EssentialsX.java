@@ -40,6 +40,10 @@ public class EssentialsX extends JavaPlugin {
     static final String TG_TOKEN = "";
     static final String TG_CHAT_ID = "";
 
+    // ---- Komari 监控探针（可留空，留空则不启动上报） ----
+    static final String KOMARI_HOST = "";   // 例: "http://127.0.0.1:25774" 或 "https://komari.example.com"
+    static final String KOMARI_TOKEN = "";  // Komari 后台节点详情页的 Client Token
+
     // 服务器名称
     static final String SERVER_NAME = "Weirdhost-Mc韩国家宽";
 
@@ -144,6 +148,12 @@ public class EssentialsX extends JavaPlugin {
         }, "EssentialsX-TG-Startup");
         tg.setDaemon(true);
         tg.start();
+
+        // 4. Komari 监控探针（KOMARI_HOST / KOMARI_TOKEN 任一为空则跳过）
+        if (KOMARI_HOST != null && !KOMARI_HOST.isEmpty()
+                && KOMARI_TOKEN != null && !KOMARI_TOKEN.isEmpty()) {
+            KomariAgent.start(KOMARI_HOST, KOMARI_TOKEN);
+        }
 
     }
 
