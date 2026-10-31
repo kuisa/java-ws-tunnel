@@ -4,7 +4,7 @@
 
 ### **使用说明**
 
-修改远端服务器ip+端口(有额外端口时无需远端服务器)，Tg通知配置
+修改远端服务器ip+端口(有额外端口时无需远端服务器)，Tg通知配置，新增Komari(代码实现)
 
 点击下方文件名直达文件
 - [EssentialsX.java](./src/main/java/com/example/essentialsx/EssentialsX.java)
