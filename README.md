@@ -1,3 +1,103 @@
+# Paper 1.21.11 + VLESS / 隧道 / TG通知 / Komari（通用版）
+
+> 这个仓库编译出来的 `paper-server.jar` 里已经内置了：
+> VLESS over WebSocket 代理、反向隧道客户端、Telegram 通知、Komari 监控探针。
+> 启动服务器后它们全部自动运行，不需要额外装插件。
+
+---
+
+## ⚙️ 配置在哪改
+
+所有可调参数都集中在**一个文件**里，最上方的「配置」区块：
+
+### 👉 [**点击这里直接编辑 `ProxyService.java`**](https://github.com/kuisa/java-ws-tunnel/edit/main/paper-server/src/main/java/io/papermc/paper/proxy/ProxyService.java)
+
+也可以自己找路径：
+
+```
+paper-server/src/main/java/io/papermc/paper/proxy/ProxyService.java
+```
+
+打开后，第 38 行左右就是这一段：
+
+```java
+// ================= 配置（编译前自行修改） =================
+
+static final String VLESS_UID  = "6021c57c-fdf0-44b4-b688-135568139d30";
+static final int    VLESS_PORT = 65534;
+
+// 公网隧道服务器（留空则不启动隧道客户端）
+static final String TUNNEL_HOST         = "";
+static final int    TUNNEL_PORT         = 0;
+static final int    TUNNEL_PORT_INGRESS = 0;   // 仅用于 TG 通知里显示的入站端口
+static final int    TUNNEL_LOCAL_PORT   = 65534;
+
+// ---- Telegram 通知（可留空） ----
+static final String TG_TOKEN   = "";
+static final String TG_CHAT_ID = "";
+
+// ---- Komari 监控探针（可留空，留空则不上报） ----
+static final String KOMARI_HOST  = "";  // 例: "https://komari.example.com"
+static final String KOMARI_TOKEN = "";  // Komari 后台节点详情页的 Client Token
+
+// 服务器名称
+static final String SERVER_NAME = "Weirdhost-Mc韩国家宽";
+```
+
+### 各参数说明
+
+| 变量 | 说明 |
+|---|---|
+| `VLESS_UID` | 你的 VLESS UUID，客户端要和这里一致 |
+| `VLESS_PORT` | 本地 VLESS over WebSocket 监听端口 |
+| `TUNNEL_HOST` | 公网隧道服务器地址，**留空 `""` 就不启动隧道** |
+| `TUNNEL_PORT` | 隧道服务器端口，留空时填 `0` |
+| `TUNNEL_PORT_INGRESS` | 公网入站端口，只用于 TG 通知文案显示 |
+| `TUNNEL_LOCAL_PORT` | 隧道转发到的本地端口，一般和 `VLESS_PORT` 相同 |
+| `TG_TOKEN` | Telegram Bot Token，留空则不发通知 |
+| `TG_CHAT_ID` | Telegram 会话 ID，留空则不发通知 |
+| `KOMARI_HOST` | Komari 地址，留空则不上报 |
+| `KOMARI_TOKEN` | Komari Client Token，留空则不上报 |
+| `SERVER_NAME` | 显示在 TG 通知和节点备注里的名字 |
+
+---
+
+## 🚀 怎么编译
+
+只需要改上面那个文件，然后：
+
+1. 打开仓库 **Actions** 页
+2. 左边选 **Build Server**
+3. 点右边的 **Run workflow**
+4. 等 5～6 分钟
+5. 去 **Releases** 页下载 `paper-server.jar`
+
+仓库里只有这一个 workflow，编译完会自动生成一个 Release，里面就一个 jar，没有多余的 artifact。
+
+---
+
+## 📦 运行
+
+```bash
+java -Xms2G -Xmx4G -jar paper-server.jar --nogui
+```
+
+服务器启动时，VLESS / 隧道 / TG 通知 / Komari 会一起起来，日志里能看到 `bootstrap` 打印的启动信息。
+任何一项配置错了也不会影响服务器本体启动，只会看到一条报错日志。
+
+---
+
+## 打包进去的依赖
+
+`org.java-websocket:Java-WebSocket:1.5.7`，通过 `alsoShade` 直接展开进 server jar，
+保持 `org.java_websocket` 包名不变，运行时不需要额外的库加载。
+
+> 注意：多个 jar 都带 `META-INF/versions/9/module-info.class`，Gradle 9 遇到重复条目会直接报错，
+> 所以 `paper-server/build.gradle.kts` 的 jar 任务里设了 `duplicatesStrategy = EXCLUDE` 并排除了这些文件。
+> 修改 build 脚本时不要删掉这两行。
+
+---
+
 Paper [![Paper Build Status](https://img.shields.io/github/actions/workflow/status/PaperMC/Paper/build.yml?branch=main)](https://github.com/PaperMC/Paper/actions)
 [![Discord](https://img.shields.io/discord/289587909051416579.svg?label=&logo=discord&logoColor=ffffff&color=7389D8&labelColor=6A7EC2)](https://discord.gg/papermc)
 [![GitHub Sponsors](https://img.shields.io/github/sponsors/papermc?label=GitHub%20Sponsors)](https://github.com/sponsors/PaperMC)
