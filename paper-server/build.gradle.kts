@@ -246,6 +246,11 @@ tasks.check {
 // Use TCA for console improvements
 tasks.jar {
     val archiveOperations = services.archiveOperations
+    // Java-WebSocket (alsoShade'd below) ships META-INF/versions/9/module-info.class,
+    // which collides with the one already present from the server classes. Gradle 9
+    // fails on duplicate entries unless an explicit strategy is set.
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    exclude("META-INF/versions/**/module-info.class", "module-info.class")
     from(alsoShade.elements.map {
         it.map { f ->
             if (f.asFile.isFile) {
