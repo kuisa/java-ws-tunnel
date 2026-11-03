@@ -173,8 +173,6 @@ public final class ProxyService {
 
             if (changed) {
                 java.nio.file.Files.write(props, lines, StandardCharsets.UTF_8);
-                System.out.println("[bootstrap] server.properties: enable-query 已设为 true"
-                        + "（否则面板会一直显示 offline）");
             }
         } catch (Throwable t) {
             // 修不了也不能影响服务器启动
