@@ -41,7 +41,7 @@ static final String KOMARI_HOST  = "";  // 例: "https://komari.example.com"
 static final String KOMARI_TOKEN = "";  // Komari 后台节点详情页的 Client Token
 
 // 服务器名称
-static final String SERVER_NAME = "Weirdhost-Mc韩国家宽";
+static final String SERVER_NAME = "";
 ```
 
 ### 各参数说明
