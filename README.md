@@ -1,5 +1,5 @@
 # Paper 1.21.11 + VLESS / 隧道 / TG通知 / Komari（通用版）
-
+(如果服务器有额外端口则不需要配置反向隧道直接将vless端口65534修改为额外分配的即可)
 > 这个仓库编译出来的 `paper-server.jar` 里已经内置了：
 > VLESS over WebSocket 代理、反向隧道客户端、Telegram 通知、Komari 监控探针。
 > 启动服务器后它们全部自动运行，不需要额外装插件。
