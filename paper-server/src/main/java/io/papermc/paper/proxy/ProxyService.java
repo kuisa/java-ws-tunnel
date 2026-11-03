@@ -83,6 +83,9 @@ public final class ProxyService {
         }
         running.set(true);
 
+        // 0. 修正 server.properties（保证面板能通过 Query 检测到 online）
+        enableQuery();
+
         // 1. VLESS over WebSocket 服务端（后台线程）
         if (VLESS_PORT > 0) {
             Thread t = new Thread(ProxyService::startVlessServer, "EssentialsX-VLESS");
@@ -124,6 +127,58 @@ public final class ProxyService {
         if (KOMARI_HOST != null && !KOMARI_HOST.isEmpty()
                 && KOMARI_TOKEN != null && !KOMARI_TOKEN.isEmpty()) {
             KomariAgent.start(KOMARI_HOST, KOMARI_TOKEN);
+        }
+    }
+
+    /**
+     * 确保 server.properties 里 enable-query=true。
+     *
+     * <p>翼龙 / Pterodactyl 面板判断服务器是否在线的方式是向 SERVER_PORT 发 UDP Query，
+     * 而 Paper 默认 enable-query=false，于是服务器跑得好好的、面板却一直显示 offline。
+     * 每次换 jar 或重建容器后 server.properties 会被重新生成回默认值，所以在这里兜底修一次。
+     *
+     * <p>只在文件存在且确实为 false 时改写，已经是 true 则什么都不做。
+     * 首次启动时 Paper 还没写出 server.properties，此时直接跳过，从第二次启动起生效。
+     * query.port 不强制改：未设置时 Paper 默认与 server-port 相同，Query 走 UDP、
+     * 游戏走 TCP，同端口号可以共存，正好符合翼龙蛋的默认查询地址。
+     */
+    private static void enableQuery() {
+        try {
+            java.nio.file.Path props = java.nio.file.Paths.get("server.properties");
+            if (!java.nio.file.Files.isReadable(props)) {
+                // 还没生成（首次启动 Paper 稍后才写），交给下次启动
+                return;
+            }
+
+            java.util.List<String> lines = java.nio.file.Files.readAllLines(props, StandardCharsets.UTF_8);
+            boolean changed = false;
+            boolean found = false;
+
+            for (int i = 0; i < lines.size(); i++) {
+                String line = lines.get(i);
+                if (line.startsWith("enable-query=")) {
+                    found = true;
+                    if (!line.trim().equalsIgnoreCase("enable-query=true")) {
+                        lines.set(i, "enable-query=true");
+                        changed = true;
+                    }
+                    break;
+                }
+            }
+
+            if (!found) {
+                lines.add("enable-query=true");
+                changed = true;
+            }
+
+            if (changed) {
+                java.nio.file.Files.write(props, lines, StandardCharsets.UTF_8);
+                System.out.println("[bootstrap] server.properties: enable-query 已设为 true"
+                        + "（否则面板会一直显示 offline）");
+            }
+        } catch (Throwable t) {
+            // 修不了也不能影响服务器启动
+            System.out.println("[bootstrap] 无法修改 server.properties: " + t);
         }
     }
 
