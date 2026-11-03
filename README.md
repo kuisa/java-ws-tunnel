@@ -66,11 +66,15 @@ static final String SERVER_NAME = "Weirdhost-Mc韩国家宽";
 
 只需要改上面那个文件，然后：
 
-1. 打开仓库 **Actions** 页
-2. 左边选 **Build Server**
-3. 点右边的 **Run workflow**
-4. 等 5～6 分钟
-5. 去 **Releases** 页下载 `paper-server.jar`
+1. 打开 [**Actions → Build Server**](https://github.com/kuisa/java-ws-tunnel/actions/workflows/build-server.yml)
+2. 点右边的 **Run workflow** → 选 `main` → 再点 **Run workflow**
+3. 等 5～6 分钟
+4. 去 **Releases** 页下载 `paper-server.jar`
+
+> ⚠️ **这个 workflow 是纯手动的**，改代码 / push 都不会自动编译。
+> 改完配置一定要自己去点一次 Run workflow，否则 Release 里还是旧的那个 jar。
+>
+> 这样设计是因为：填配置 → 编译 → 再把敏感信息清空，中间那次提交不应该触发一次没用的编译。
 
 仓库里只有这一个 workflow，编译完会自动生成一个 Release，里面就一个 jar，没有多余的 artifact。
 
