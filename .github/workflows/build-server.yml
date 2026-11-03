@@ -40,7 +40,14 @@ jobs:
         run: ./gradlew applyPatches --stacktrace
 
       - name: Build paperclip jar
-        run: ./gradlew createMojmapPaperclipJar --stacktrace
+        env:
+          BUILD_NUMBER: ${{ github.run_number }}
+          BUILD_STARTED_AT: ${{ github.event.repository.pushed_at }}
+        run: |
+          # Paper's version check expects a real build number and timestamp in the
+          # manifest. Without these it reports "You are running an unknown version".
+          export BUILD_STARTED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          ./gradlew createMojmapPaperclipJar --stacktrace
 
       - name: Collect jar
         run: |
